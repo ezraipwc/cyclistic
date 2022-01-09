@@ -1,0 +1,260 @@
+---
+title: "log_cyclistic_data"
+author: "W.C. Ip"
+date: "9/2/2021"
+output: html_document
+---
+
+## Work Log for Cyclistic Data Cleaning
+
+* Downloaded data from April 2020 (202004-...zip) to July 2021 (202107-...zip) into raw folder
+* **January 7 2022**: Redo work to give concise, repeatable approach. Previous R/SQL files relocate to sandbox folder.
+
+
+### 1. Goal of Project
+* To distinguish the usage trend between **casual** users and **member** users
+* Find usage details between two groups:
+  + **Mean** usage 
+  + Lists of **Maximum** and **Minimum** usage
+  + Weekday vs Weekend usage
+  + Weekly vs Monthly vs Seasonal
+  + Favourite routes / Hotspots of Start Points and End Points
+  + Bike types preferences between user group
+
+### 2. Tools
+* R
+* PostgreSQL
+
+### 3. Raw data properties (from 202107-divvy-tripdata.csv):
+* 13 columns (ride_id,	rideable_type,	started_at,	ended_at,	start_station_name,	start_station_id,	end_station_name,	end_station_id,	start_lat,	start_lng,	end_lat,	end_lng,	member_casual)
+* Dimensions: 822,410 x 13 (from R)
+
+* All are formatted as characters, except lattitude/longitude data (4 columns) are formatted as <dbl> (double class in R, i.e. double float)
+ 
+#### ride_id: string of 16 capitalized alphanumeric
+  + Some ride_id with only numbers were mistaken as integers by Calc and thus corrupted (scientific notation, or leading zeros removal). They can be recovered using R.
+
+#### rideable_type: 3 categories (docked_bike, classic_bike, electric_bike)
+  + 2 types of bikes available: classical bike or electric bike
+    + docked_bike may be no different from classic_bike
+  + 2 types of permissible parking options: to docks or to other bike parks
+    + if parking outside docks, how the end_trip data look like is debatable.
+  + electric_bike has two major issues in terms of data sanity
+    1. missing start_station_id
+    2. identical start_lat/lng and end_lat/lng unrounded for two different stations
+    3. it is permissible to park ebike outside station in zone 2. How it reflects on end of trip data (end_time/end_station) is uncertain.
+    
+
+#### started_at/ended_at: as characters, in format like "2021-07-31 08:24:56"
+  + Convertible to <dttm> using as.POSIXlt
+
+#### start_station_name/end_station_name
+  + 692 stations (from Case-Study-1.pdf)
+  + *Task: Should check if names match their station_id without errors*
+    + 8 station ids do have duplicate name around duSable. Not a major issue
+    + Also stations renamed as Vaccination sites
+    + No station name has more than 1 id at the same time
+
+
+#### start_station_id/end_station_id: 
+  + 2 systems: the following is December 2020 onwards.
+  + Full digits (some have decimal points, wow!)
+    + 2 digits (20)
+    + 3 digits (3xx series, 4xx series, 5xx series, 6xx series)
+    + 5 digits (13xxx, 15xxx, 16xxx, 17xxx, 18xxx, 20xxx)
+    + 6 digits (201022, 202480)
+  + (empty)
+  + Characters only
+    + DIVVY 001
+    + DIVVY CASSETTE REPAIR MOBILE STATION
+    + Hubbard Bike-checking (LBS-WH-TEST)
+  + Mixed characters and digits
+    + Without hyphen
+      + E002 to E014
+      + KA1503... to KA1504...
+      + KA1706... 
+      + KP1706...
+      + KA17018054, KA17018068 (2 digits less than the above KA1... series)
+      + TA1305... to TA1309...
+    + With hyphen
+      + LF-005
+      + LP-
+      + RN-
+      + RP-001 to RP-009
+      + SL-005 to SL-013
+      + WL-008 to WL-012
+
+##### Station id properties:
+  + Empty id:
+    + If station_id empty, then the respective station_name is empty as well. Latitude/Longitude responding to that start/end point ends with 2 decimal points.
+      + *Conversely not true, examples include:*
+         + row 5771 (end_lat/lng: 41.7/-87.7), end_station_name: Kedzie Ave & 104th St	(end_station_id: 20201)
+         + row 45993 (end_lat/lng: 41.69/-87.54) end_station_name: Avenue L & 114th St	(end_station_id: 20220)
+    + Occurrence: to electric_bike **only** at starting point and occurs to classical_bike as well at ending point [verified by R]
+    + Never occur to docked_bike [R; self-evident]
+    
+  + Characters only id:
+    + In tripdata_202107.csv, all those characters only id (totalling 3) represent bike repairment/testing facilities. Trips entering/exiting these facilites are not actual trips done by customers.
+
+#### member_casual: 2 categories (casual, member)
+  + No missing member_casual field in tripdata_202107.csv. Good news.
+  
+### 4. Column addition
+  Five columns are further added to tripdata_202107 dataframe in R (duration, start_lat_2dp, end_lat_2dp, start_lng_2dp, end_lng_2dp)
+  + duration
+    + obtained by ended_at - started_at
+      + negative duration occured (Min: -12)
+      + longest duration exceeds 34 days (Max: 2946429)
+      
+  + start/end_lat/lng_2dp
+    + At raw file, the lat/lng data have 5 decimal places. One station can have multiple lat/lng information
+    + Rounding off lat/lng to 2 decimal places can reduce multiple lat/lng issue
+      + A round trip identifier if station_id missing
+      + Moreover, for all empty station_name fields, their significant lat/lng is up to 2 decimal places
+    + For now I'll stick with 2dp. Nevertheless, this is silly to determine whether 2dp or 3dp should be used
+      + 2dp uncertainties = 0.005 = 18" = 540m
+      + 3dp uncertainties = 0.0005 = 1.8" = 54m
+      + 2 bus stops in a city centre should be around 200m.
+      + If I'm to do this again, I would convert lat/lng into dms system. Then, I'd confirm difference between 2 bike stns to be a vector magnitude of ~6" apart (0.001666...). But I'm not doing Geodesics right now.
+      + Reference: https://www.usna.edu/Users/oceano/pguth/md_help/html/approx_equivalents.htm
+
+### January 7 2022
+* Rewriting R and SQL files for repeatable approaches
+  * R for monthly probing, minor cleaning tasks (e.g. inserting missing name), determining round-trip cut-off; SQL for 12-month aggregate (e.g. inserting missing ids, purging data)
+  * Previous files are put into folder "sandbox"
+  * Change the round-trip titration identification using data with only known start/end station (previously, all data with rounded-off lat/lng)
+  * Purge all trips with missing end lat/lng
+
+### November 1-2 (1-1/2)
+* Attempted importing cleaned data to Tableau
+
+### October 28 (1/2)
+* Split the table and exported as csv (total_final, casual_final, member_final)
+
+### October 21 (6)
+* Bad day, log_data_cleaning2 corrupted. 
+* 12-month aggregate are done in a separate R file: cyclistic_workstation2.R
+
+### October 11, 2021 (1)
+* noted the 2 systems of stations id before Dec 2020 and after Dec 2020
+      
+### October 9-10, 2021 (3 hrs)
+* tripdata_202107 cleaned
+  + Did not remove trips over 24 hrs. I suppose Cyclistic will do suitable fare adjustment for late returns. So they're still valid trips in my eyes. 
+* Trend for Day of week usage, week number usage, popular start/end stations studied
+* Above trends studied again by varying rideable_type between ebike and regular bike.
+* *NEXT STEP:*
+  + Aggregate data of each month spanning August 2020 to July 2021 ("tablename: tripdata")
+    + Redo data cleaning in similar fashion
+    + Notice the weekly usage, monthly usage, and quarterly usage this time
+  + Derive two extra tables parts according to rideable_type (e-bike vs docked/classical bike)
+    + Rename as "ebike_tripdata", "classical_tripdata"
+
+### October 8, 2021 (1-1/2 hrs)
+* Deleted entries as indicated by Oct 7 goal
+  + 801230 rows left
+  + Observations on new data
+    + Min time: 4 sec, max time: 28 days~
+    + Only 14 entries <= 30s, 3 of which are known to have different start/end ids
+    + Of 228 entries under 60 seconds, only 34 of them have empty station id (15 percent).
+    + Only 94 trips >= 3 days. Not much issues.
+* Weekday usage frequency & week of year usage frequency obtained
+  + Nothing special about usage frequencies across the weeks in July 2021
+  + Weekday frequency: Lowest on Monday (92k), Highest on Saturday (158k)
+    + *Thursday has higher usage than Sunday (118k vs 107k)*
+    + In this bike system, weekend trend may cover Thursday to Sunday
+
+### October 7, 2021 (2-2/3 hrs)
+* Defined goal of this week: 
+  1. DROP ENTRIES WHERE
+    + same start/end id in short interval (obtained as trips under 163s)
+    + round off 2 dp for each row of lat/lng data. If matching lat_2dp/lng_2dp and short -> drop
+    + from/to repairing stations
+    + trips with untraceable ending data (missing ending id and lat/lng)
+    + pay attention to trips over 1 day. This bike sharing plan is meant for short trips
+
+  2. CREATE
+    + weekday of started_at
+    + number of week of started_at
+    
+  3. STUDY BEHAVIOURAL DIFFERENCE BETWEEN CASUAL AND MEMBER USERS
+    + split into 2 tables, one casual, one member
+    + peak starting hours of each weekday
+    + usage at weekdays and different time intervals
+    + 5 most popular starting point/ending point at each day/week/time interval
+    
+* Found some rows to drop 
+* Found another technical difficulties for electric bike. Same lat/lng (unrounded) data for different starting and ending ids
+
+### September 7, 2021 (3 hrs)
+* Created SQL database in pgAdmin 4 (Database: cyclistic; Schemas/public/Tables/tripdata_202107/createquery.sql)
+* Data cleaning on multiple station names for station_ids 
+  + Insight on temporary stations, repairment centres and vaccination centres
+* Data cleaning on missing data on different columns
+* Added duration as trip duration (ended_at - started_at) in interval format
+* Added table stn_info by extracting all start_station info
+* (Refer all sql files at this directory ./cyclisticquery.sql)
+
+### September 6, 2021 (5 hrs)
+* Installed PostgreSQL 13 and pgAdmin 4
+* Created public table for tripdata_202107 (file "./createquery.sql")
+* Tired, call it a day
+* query file name : ./cyclisticquery.sql
+* minor task, but identified the 719 starting station names
+
+### September 5, 2021 (5-1/3hr)
+* Redo round trip analysis.
+  + Stored round trip data as a dataframe
+  + Remove cumulative effect to time: consider proportion of round trip only within each 10 second interval
+  + new trend ranges defined: short(0 to 50), middle(90 to 250), long(625 to 1200)
+* Decided the assumption that trips over 90 seconds are actual trips
+* Obtained casual_trip_data
+* **Target for tomorrow**: 
+  + find upper bound for cut off
+  + Design a scheme to remove data
+    + Depot bikes
+    + Trips under 90s**(OBSOLETE 2/1/2022)** with either same start/end id or same start/end lat/lng (2dp)
+    + Keep some ending at different stations/coordinates for trips under 90s
+    + MUST NOT remove all entries with empty station names. This will take away significant portion of electric bike data.
+    + line 119 and 126 are illogic queries. Think alternative way to purge lines rather than using long filter queries
+  
+### September 4, 2021 (3 hrs)
+* Manipulated geodata at R
+  + stations have consistent lat/lng rounded to 2 dp
+    + While consistent, for starting station Michigan Ave & Washington St (total = 4097), 2 entries have -87.63 lng (0.05% uncertainties for this case)
+    + **Problem: several stations may share same rounded lat/lng**
+  + no missing starting station name from bikes other than electric bikes
+    + Conversely NOT true, missing end station name possible for classic bikes and electric bikes, but not docked bikes
+* Decided to ignore all round trips spanning less than 2 minutes**(OBSOLETE 2/1/2022)**.
+  + plotted round trips with duration <= 0 to duration <= 1200 (20 minutes)
+  + Formula: ggplot() + geom_point(aes(x = seq(0,1200,10), y = round_trip_vec/total_short_vec))
+  + graph shows a level off at around 12.5% for bikes ending at starting point at around 1200 seconds
+  + At 120s onwards, only 90.6% bikes do round trips, with rapid drop trend
+  + could find line of best fit to determine 
+
+### September 3, 2021 (1.5 hrs)
+
+* Filtered total_duration >= 24:0:0 
+  + Chances are all of the ending location data are missing
+  + Naked eye judges that most are done by casual riders
+* For entire entries before clean up:
+  Mean_duration	0.016812945703389	0:24:13
+  Median_duration	0.009270833332266	0:13:21
+  Max_duration	34.1021875000006	818:27:09
+  Min_duration	-0.000138888892252	-0:00:12
+
+* **OBSOLETE 2/1/2022** *(Out of scope: developed an algorithm to find effective trips and clean up missing station names. See cyclistic_workstation.R Appendix)*
+* NOT all entries are trips, especially trips below 2 minutes. These trips just return to the same station at short period of time.
+* In theory, we can wait for Excel vlookup to clean missing station names. It's slow.
+* Need: SQL to decide which trips are really trips. Find proportion of same station trips at short interval from 1 minutes to 3 minutes in 10s intervals.
+* **Target for next week: research SQL servers to handle 800k+ to ~10M entries.**
+  
+### September 2, 2021 (4 hrs)
+
+* Cleaning 202107-divvy-tripdata.csv [LibreOffice Calc + R]
+  + Dimensions: 822,410 x 13 [from R]
+* Write the Raw Data Properties
+* Conversion of started_at and ended_at to date format [spreadsheet]
+* Added total_duration for each trip [column O, spreadsheet]
+  + Some trips have negative time (7 at 13192, 3 at 13271, 1 at 18067, 1 at TA1309000059, 1 missing data (row 613432) ends at *Valli Produce - Evanston Plaza* 599)
+* 
