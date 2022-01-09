@@ -4,7 +4,7 @@ This is a data analytical project in studying the usage behaviour of a bike shar
 
 
 ## Source of Data
-Data available [here[(https://divvy-tripdata.s3.amazonaws.com/index.html). Permission by Motivate International Inc. under this [licence](https://ride.divvybikes.com/data-license-agreement).
+Data available [here](https://divvy-tripdata.s3.amazonaws.com/index.html). Permission by Motivate International Inc. under this [licence](https://ride.divvybikes.com/data-license-agreement).
 
 ## Files and Folders
 ### Files
